@@ -1,4 +1,4 @@
-// lib/providers/openai_provider.dart
+// lib/providers/openai_provider.dart (fixed initialHistory by using setter to notifyListeners on load, ensuring all history messages display)
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:openai_dart/openai_dart.dart';
@@ -35,8 +35,9 @@ class OpenAIProvider extends ChangeNotifier implements LlmProvider {
       apiKey: apiKey,
       baseUrl: baseUrl,
     );
+    // Use setter to set initial history and notifyListeners for UI to render all messages
     if (initialHistory != null) {
-      _history.addAll(initialHistory);
+      history = initialHistory;
     }
   }
 

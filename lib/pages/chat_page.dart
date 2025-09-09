@@ -1,4 +1,4 @@
-// lib/pages/chat_page.dart (added safe firstWhere in _init to prevent StateError if chat not found)
+// lib/pages/chat_page.dart (fixed null bang by assigning _provider directly before addListener; added mounted check only for setState)
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -60,17 +60,21 @@ class _ChatViewState extends State<ChatView> {
     double maxTokens,
   ) {
     _provider?.removeListener(_onHistoryChanged);
+    // Assign directly to ensure non-null before addListener
+    _provider = OpenAIProvider(
+      apiKey: apiKey,
+      baseUrl: baseUrl,
+      model: model,
+      temperature: temperature,
+      topP: topP,
+      maxTokens: maxTokens,
+      initialHistory: history ?? [],
+    );
+    // Only setState if mounted to trigger rebuild
     if (mounted) {
-      setState(() => _provider = OpenAIProvider(
-        apiKey: apiKey,
-        baseUrl: baseUrl,
-        model: model,
-        temperature: temperature,
-        topP: topP,
-        maxTokens: maxTokens,
-        initialHistory: history ?? [],
-      ));
+      setState(() {});
     }
+    // Now safe to add listener
     _provider!.addListener(_onHistoryChanged);
   }
 
@@ -85,7 +89,10 @@ class _ChatViewState extends State<ChatView> {
     if (_provider == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    return LlmChatView(provider: _provider!);
+    return ListenableBuilder(
+      listenable: _provider!,
+      builder: (context, child) => LlmChatView(provider: _provider!),
+    );
   }
 
   Future<void> _onHistoryChanged() async {

@@ -1,4 +1,4 @@
-// lib/data/chat_repository.dart (added real-time snapshots, lastModel support, and listener management)
+// lib/data/chat_repository.dart (fixed updateHistory to always set messages, ensuring assistant text updates during streaming and persists in DB)
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -252,13 +252,10 @@ class ChatRepository extends ChangeNotifier {
 
   Future<void> updateHistory(Chat chat, List<ChatMessage> history) async {
     for (var i = 0; i != history.length; ++i) {
-      // skip if the message already exists
       final id = i.toString().padLeft(3, '0');
-      final querySnapshot = await _historyCollection(chat).doc(id).get();
-      if (querySnapshot.exists) continue;
-
       final message = history[i];
       final json = message.toJson();
+      // Always set to update text for existing messages (e.g., streaming assistant responses)
       await _historyCollection(chat).doc(id).set(json);
     }
   }
