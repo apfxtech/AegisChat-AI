@@ -1,4 +1,4 @@
-// lib/pages/home_page.dart (added reload mechanism for ChatView after settings save)
+// lib/pages/home_page.dart (fixed firstWhere orElse by using try-catch to return null safely without type mismatch)
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -25,16 +25,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   String? _currentChatId;
   TabController? _tabController;
   int _reloadKey = 0; // Key for reloading ChatView after settings change
+  VoidCallback? _repoListener; // Listener for real-time updates
 
   @override
   void initState() {
     super.initState();
     unawaited(_setRepository());
   }
-  
+
   @override
   void dispose() {
-    _tabController?.dispose(); // Не забываем освобождать ресурсы
+    _tabController?.dispose();
+    // Remove listener
+    _repository?.removeListener(_repoListener!);
+    _repository?.dispose(); // Cleanup listeners
     super.dispose();
   }
 
@@ -43,13 +47,32 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _repository = await ChatRepository.forCurrentUser;
     // Принудительная синхронизация globals при запуске/перезапуске
     await ChatRepository.getGlobalSettings();
-    if (_repository!.chats.isNotEmpty) {
-      _currentChatId = _repository!.chats.last.id;
-    }
+    // Do not set _currentChatId here; let listener handle after first snapshot
     _initializeOrUpdateTabController(); // Инициализируем контроллер
+
+    // Add listener for real-time updates from repo
+    _repoListener = () {
+      if (mounted && _repository != null) {
+        // Auto-set _currentChatId on first load if null and chats available
+        if (_currentChatId == null && _repository!.chats.isNotEmpty) {
+          _currentChatId = _repository!.chats.last.id;
+          _reloadKey++;
+          _initializeOrUpdateTabController(initialIndex: 1); // Switch to chat tab
+        } 
+        // Reset _currentChatId if it points to a non-existent chat (e.g., remote delete)
+        else if (_currentChatId != null && !_repository!.chats.any((c) => c.id == _currentChatId!)) {
+          _currentChatId = _repository!.chats.isNotEmpty ? _repository!.chats.last.id : null;
+          _reloadKey++;
+          _initializeOrUpdateTabController(initialIndex: _currentChatId != null ? 1 : 0);
+        }
+        setState(() {});
+      }
+    };
+    _repository!.addListener(_repoListener!);
+
     setState(() {});
   }
-  
+
   void _initializeOrUpdateTabController({int? initialIndex}) {
     _tabController?.dispose();
     final tabCount = _currentChatId != null ? 2 : 1;
@@ -62,10 +85,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _tabController!.addListener(() => setState(() {}));
   }
 
-
   Chat? _getCurrentChat() {
     if (_repository == null || _currentChatId == null) return null;
-    return _repository!.chats.singleWhere((chat) => chat.id == _currentChatId!);
+    // Use try-catch to safely return null if chat not found (avoids firstWhere orElse type issue)
+    try {
+      return _repository!.chats.firstWhere((chat) => chat.id == _currentChatId!);
+    } on StateError {
+      return null;
+    }
   }
 
   String _getCurrentTitle() {
@@ -139,13 +166,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   onRenameChat: _onRenameChat,
                   onDeleteChat: _onDeleteChat,
                 ),
-                if (_currentChatId != null)
+                if (_currentChatId != null && currentChat != null)
                   ChatView(
                     key: ValueKey('${_currentChatId!}_$_reloadKey'), // Reload key to recreate state after settings
                     chatId: _currentChatId!,
                     repository: _repository!,
                     onTitleChanged: () => setState(() {}),
-                  ),
+                  )
+                else if (_currentChatId != null && currentChat == null)
+                  const Center(child: Text('Chat not found. Please select a chat.')),
               ],
             ),
     );
@@ -184,6 +213,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             maxTokens: updatedChat['maxTokens'] as double,
           );
           await _repository!.updateChat(updatedChatObj);
+          // Update global lastModel with the new chat model
+          final updatedGlobals = Map<String, dynamic>.from(globalSettings);
+          updatedGlobals['lastModel'] = updatedChat['model'];
+          await ChatRepository.updateGlobalSettings(updatedGlobals, _repository!.userDoc);
           if (mounted) setState(() { _reloadKey++; }); // Reload ChatView to recreate provider with new chat settings
         },
       ),
@@ -193,7 +226,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Future<void> _onAdd() async {
     final chat = await _repository!.addChat();
     final defaultTitle = 'Новый чат';
-    final updatedChat = Chat(id: chat.id, title: defaultTitle);
+    final updatedChat = Chat(id: chat.id, title: defaultTitle, model: chat.model); // Preserve model from addChat
     await _repository!.updateChat(updatedChat);
     
     setState(() {
@@ -278,6 +311,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       setState(() {
         if (isDeletingCurrent) {
+          // Listener will handle reset, but immediate set to avoid flash
           if (_repository!.chats.isNotEmpty) {
             _currentChatId = _repository!.chats.last.id;
           } else {

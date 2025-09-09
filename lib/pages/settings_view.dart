@@ -1,4 +1,4 @@
-// lib/pages/settings_view.dart
+// lib/pages/settings_view.dart (no direct changes; lastModel update handled in HomePage's onSaveChat callback)
 import 'package:flutter/material.dart';
 
 class SettingsView extends StatefulWidget {

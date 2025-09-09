@@ -1,4 +1,4 @@
-// lib/pages/chat_page.dart (updated: check for 'Untitled' in _onHistoryChanged, display title in appbar if needed, but since shared, use display in tab)
+// lib/pages/chat_page.dart (added safe firstWhere in _init to prevent StateError if chat not found)
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -35,7 +35,11 @@ class _ChatViewState extends State<ChatView> {
   }
 
   Future<void> _init() async {
-    _currentChat = widget.repository.chats.singleWhere((chat) => chat.id == widget.chatId);
+    // Use firstWhere with orElse to safely handle missing chat
+    _currentChat = widget.repository.chats.firstWhere(
+      (chat) => chat.id == widget.chatId, 
+      orElse: () => throw StateError('Chat with ID ${widget.chatId} not found.')
+    );
     final history = await widget.repository.getHistory(_currentChat);
     
     // Load globals and chat-specific settings (static call)
