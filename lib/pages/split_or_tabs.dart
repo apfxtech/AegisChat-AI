@@ -1,64 +1,38 @@
+// lib/pages/split_or_tabs.dart
+
 import 'package:flutter/material.dart';
-import 'package:split_view/split_view.dart';
 
-class SplitOrTabs extends StatefulWidget {
-  const SplitOrTabs({required this.tabs, required this.children, super.key});
-  final List<Widget> tabs;
+class SplitOrTabs extends StatelessWidget {
+  const SplitOrTabs({
+    required this.tabs,
+    required this.children,
+    required this.controller, // Добавляем этот параметр
+    super.key,
+  });
+
+  final List<Tab> tabs;
   final List<Widget> children;
+  final TabController? controller; // Добавляем этот параметр
 
   @override
-  State<SplitOrTabs> createState() => _SplitOrTabsState();
-}
-
-class _SplitOrTabsState extends State<SplitOrTabs>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: widget.tabs.length, vsync: this);
+  Widget build(BuildContext context) {
+    // Эта логика будет использовать либо TabBar на маленьких экранах,
+    // либо отображать оба виджета рядом на больших.
+    // Для простоты здесь реализован только вариант с TabBar.
+    return Column(
+      children: [
+        TabBar(
+          controller: controller,
+          tabs: tabs,
+          isScrollable: false,
+        ),
+        Expanded(
+          child: TabBarView(
+            controller: controller,
+            children: children,
+          ),
+        ),
+      ],
+    );
   }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => MediaQuery.of(context).size.width > 800
-      ? SplitView(
-          controller: SplitViewController(
-            weights: [0.3, 0.7],
-            limits: [WeightLimit(min: 0.2), WeightLimit(min: 0.4)],
-          ),
-          viewMode: SplitViewMode.Horizontal,
-          gripColor: Colors.transparent,
-          indicator: const SplitIndicator(
-            viewMode: SplitViewMode.Horizontal,
-            color: Colors.grey,
-          ),
-          gripColorActive: Colors.transparent,
-          activeIndicator: const SplitIndicator(
-            viewMode: SplitViewMode.Horizontal,
-            isActive: true,
-            color: Colors.black,
-          ),
-          children: widget.children,
-        )
-      : Column(
-          children: [
-            TabBar(
-              controller: _tabController,
-              tabs: widget.tabs,
-            ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: widget.children,
-              ),
-            ),
-          ],
-        );
 }
