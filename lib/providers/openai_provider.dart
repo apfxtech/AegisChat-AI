@@ -1,4 +1,5 @@
-// lib/providers/openai_provider.dart (fixed initialHistory by using setter to notifyListeners on load, ensuring all history messages display)
+// lib/providers/openai_provider.dart
+
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:openai_dart/openai_dart.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_ai_toolkit/flutter_ai_toolkit.dart';
 class OpenAIProvider extends ChangeNotifier implements LlmProvider {
   late final OpenAIClient _client;
   List<ChatMessage> _history = [];
+  bool _isStreaming = false;
 
   @override
   Iterable<ChatMessage> get history => _history;
@@ -16,6 +18,8 @@ class OpenAIProvider extends ChangeNotifier implements LlmProvider {
     _history = h.toList();
     notifyListeners();
   }
+
+  bool get isStreaming => _isStreaming;
 
   OpenAIProvider({
     required String apiKey,
@@ -96,6 +100,9 @@ class OpenAIProvider extends ChangeNotifier implements LlmProvider {
     _history.add(assistantMessage);
     notifyListeners();
 
+    _isStreaming = true;
+    notifyListeners();
+
     String buffer = '';
     try {
       await for (final res in stream) {
@@ -115,9 +122,16 @@ class OpenAIProvider extends ChangeNotifier implements LlmProvider {
         }
       }
       debugPrint('OpenAI stream completed.');
+      if (buffer.isEmpty) {
+        assistantMessage.text = 'No response from model.';
+        notifyListeners();
+      }
     } catch (e) {
       debugPrint('Error in OpenAI stream: $e');
       assistantMessage.text = 'Ошибка: $e';
+      notifyListeners();
+    } finally {
+      _isStreaming = false;
       notifyListeners();
     }
   }

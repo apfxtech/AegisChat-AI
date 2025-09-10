@@ -28,7 +28,7 @@ class ChatView extends StatefulWidget {
 }
 
 class _ChatViewState extends State<ChatView> {
-  LlmProvider? _provider;
+  OpenAIProvider? _provider; // Change to OpenAIProvider for isStreaming access
   late Chat _currentChat;
   StreamSubscription<QuerySnapshot>? _historySubscription;
 
@@ -106,26 +106,21 @@ class _ChatViewState extends State<ChatView> {
       ..sort((a, b) => a.key.compareTo(b.key));
     final sortedHistory = newHistory.map((e) => e.value).toList();
 
-    // Update provider only if history has changed
+    // Update provider only if history has changed (avoids infinite loops)
     if (_provider != null && _isHistoryDifferent(sortedHistory, _provider!.history.toList())) {
-      debugPrint('History changed, updating provider');
-      final globals = await ChatRepository.getGlobalSettings();
-      final apiKey = globals['apiKey'] as String? ?? '';
-      final baseUrl = globals['baseUrl'] as String? ?? 'https://api.openai.com/v1';
-      _setProvider(sortedHistory, apiKey, baseUrl, _currentChat.model, _currentChat.temperature, _currentChat.topP, _currentChat.maxTokens);
+      debugPrint('History changed, updating provider history directly');
+      _provider!.history = sortedHistory;
       widget.onTitleChanged?.call();
     } else {
       debugPrint('No history change detected');
     }
   }
 
-  // Compare histories to detect changes efficiently
+  // Compare histories to detect changes
   bool _isHistoryDifferent(List<ChatMessage> newHistory, List<ChatMessage> oldHistory) {
     if (newHistory.length != oldHistory.length) return true;
     for (var i = 0; i < newHistory.length; i++) {
-      final newMsg = newHistory[i];
-      final oldMsg = oldHistory[i];
-      if (newMsg.text != oldMsg.text || newMsg.origin != oldMsg.origin) {
+      if (newHistory[i].text != oldHistory[i].text || newHistory[i].origin != oldHistory[i].origin) {
         return true;
       }
     }
@@ -191,10 +186,13 @@ class _ChatViewState extends State<ChatView> {
 
   Future<void> _onHistoryChanged() async {
     if (!mounted || _provider == null) return;
+    if (_provider!.isStreaming) return; // Skip DB update during streaming
+
     final history = _provider!.history.toList();
-    debugPrint('History changed, length: ${history.length}, last message: ${history.last.text?.substring(0, 50) ?? ''}...');
+    debugPrint('History changed (not streaming), length: ${history.length}, last message: ${history.last.text?.substring(0, 50) ?? ''}...');
 
     await widget.repository.updateHistory(_currentChat, history);
+    debugPrint('History saved to Firestore');
 
     if (history.length != 2 || _currentChat.title != ChatRepository.newChatTitle) {
       return;
@@ -215,7 +213,7 @@ class _ChatViewState extends State<ChatView> {
     );
     try {
       final stream = tempProvider.sendMessageStream(
-        'Please give me a short title for this chat based on the user message: "${history[0].text}". It should be a single short phrase, max 50 characters, no markdown.',
+        'You are a helpful assistant. Please give a short title for this chat based on the user message: "${history[0].text}". Respond with only the title, a single short phrase, max 50 characters, no markdown or extra text.',
       );
 
       StringBuffer titleBuffer = StringBuffer();
@@ -226,11 +224,12 @@ class _ChatViewState extends State<ChatView> {
       final title = titleBuffer.toString().trim();
       debugPrint('Generated title: $title');
 
-      final newTitle = title.isNotEmpty ? title : 'New Chat ${DateTime.now().year}-${DateTime.now().month}-${DateTime.now().day}'; // Fallback with date
+      final newTitle = title.isNotEmpty ? title : 'New Chat';
       if (newTitle == _currentChat.title) return;
 
       final chatWithNewTitle = _currentChat.copyWith(title: newTitle);
       await widget.repository.updateChat(chatWithNewTitle);
+      debugPrint('Chat title updated to: $newTitle');
 
       if (mounted) {
         setState(() => _currentChat = chatWithNewTitle);
@@ -238,8 +237,8 @@ class _ChatViewState extends State<ChatView> {
       }
     } catch (e) {
       debugPrint('Error generating chat title: $e');
-      // Use fallback title
-      final newTitle = 'New Chat ${DateTime.now().year}-${DateTime.now().month}-${DateTime.now().day}';
+      // Use fallback title if API fails
+      final newTitle = 'New Chat';
       final chatWithNewTitle = _currentChat.copyWith(title: newTitle);
       await widget.repository.updateChat(chatWithNewTitle);
       if (mounted) {
