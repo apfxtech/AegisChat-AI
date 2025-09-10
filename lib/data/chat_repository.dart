@@ -1,4 +1,4 @@
-// lib/data/chat_repository.dart (fixed updateHistory to always set messages, ensuring assistant text updates during streaming and persists in DB)
+// lib/data/chat_repository.dart (added try-catch in listener to skip invalid docs and prevent crashes; ensured addChat creates even if empty; added check in forCurrentUser to add initial chat if none)
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -46,8 +46,11 @@ class ChatRepository extends ChangeNotifier {
 
       _currentUserRepository = repo;
 
-      // if there are no chats after initial load, add a new one (listener will handle, but check after delay if needed)
-      // For now, let UI handle empty state
+      // Wait briefly for initial snapshot, then add if empty
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (repo.chats.isEmpty) {
+        await repo.addChat();
+      }
     }
 
     return _currentUserRepository!;
@@ -59,7 +62,15 @@ class ChatRepository extends ChangeNotifier {
       try {
         final chats = <Chat>[];
         for (final doc in snapshot.docs) {
-          chats.add(Chat.fromJson(doc.data()! as Map<String, dynamic>));
+          try {
+            // Skip invalid docs
+            if (doc.data() == null) continue;
+            final data = doc.data() as Map<String, dynamic>;
+            if (data['id'] == null || data['title'] == null) continue;
+            chats.add(Chat.fromJson(data));
+          } catch (e) {
+            debugPrint('Skipping invalid chat doc ${doc.id}: $e');
+          }
         }
         _chats = chats;
         notifyListeners(); // Trigger UI update
@@ -238,9 +249,16 @@ class ChatRepository extends ChangeNotifier {
 
     final indexedMessages = <int, ChatMessage>{};
     for (final doc in querySnapshot.docs) {
-      final index = int.parse(doc.id);
-      final message = ChatMessage.fromJson(doc.data()! as Map<String, dynamic>);
-      indexedMessages[index] = message;
+      try {
+        // Skip invalid docs
+        if (doc.data() == null) continue;
+        final data = doc.data() as Map<String, dynamic>;
+        final index = int.tryParse(doc.id) ?? 0;
+        final message = ChatMessage.fromJson(data);
+        indexedMessages[index] = message;
+      } catch (e) {
+        debugPrint('Skipping invalid message doc ${doc.id}: $e');
+      }
     }
 
     final messages = indexedMessages.entries

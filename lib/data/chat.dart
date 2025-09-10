@@ -1,3 +1,4 @@
+// lib/data/chat.dart (added null-safe casting in fromJson to prevent type cast errors)
 class Chat {
   Chat({
     required this.id,
@@ -9,8 +10,8 @@ class Chat {
   });
 
   factory Chat.fromJson(Map<String, dynamic> json) => Chat(
-        id: json['id'] as String,
-        title: json['title'] as String,
+        id: json['id'] as String? ?? '',
+        title: json['title'] as String? ?? '',
         model: json['model'] as String? ?? 'gpt-4o',
         temperature: (json['temperature'] as num?)?.toDouble() ?? 0.7,
         topP: (json['topP'] as num?)?.toDouble() ?? 1.0,

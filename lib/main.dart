@@ -1,14 +1,16 @@
-// lib/main.dart (updated without chat route, using login for auth)
+// lib/main.dart
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:dynamic_color/dynamic_color.dart'; // 1. Импортируем пакет
 
 import 'data/chat_repository.dart';
 import 'firebase_options.dart';
 import 'login_info.dart';
 import 'pages/auth_page.dart';
 import 'pages/home_page.dart';
+import 'theme.dart'; // Импортируем наш обновлённый theme.dart
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,7 +24,6 @@ class App extends StatefulWidget {
     FirebaseAuth.instance.authStateChanges().listen((user) async {
       LoginInfo.instance.user = user;
       ChatRepository.user = user;
-      // Загрузка globals при смене пользователя или перезапуске (если залогинен)
       if (user != null) {
         await ChatRepository.getGlobalSettings();
       }
@@ -61,8 +62,38 @@ class _AppState extends State<App> {
   );
 
   @override
-  Widget build(BuildContext context) => MaterialApp.router(
-        routerConfig: _router,
-        debugShowCheckedModeBanner: false,
-      );
+  Widget build(BuildContext context) {
+    // 2. Оборачиваем MaterialApp в DynamicColorBuilder
+    return DynamicColorBuilder(
+      builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+        ColorScheme lightColorScheme;
+        ColorScheme darkColorScheme;
+
+        // Если система предоставила динамические цвета (Android 12+) - используем их
+        if (lightDynamic != null && darkDynamic != null) {
+          lightColorScheme = lightDynamic.harmonized();
+          darkColorScheme = darkDynamic.harmonized();
+        } else {
+          // Иначе - используем наш запасной оранжевый цвет
+          lightColorScheme = ColorScheme.fromSeed(seedColor: brandOrange);
+          darkColorScheme = ColorScheme.fromSeed(
+            seedColor: brandOrange,
+            brightness: Brightness.dark,
+          );
+        }
+
+        // 3. Создаём темы на лету с помощью нашей функции
+        final lightTheme = buildTheme(lightColorScheme);
+        final darkTheme = buildTheme(darkColorScheme);
+
+        return MaterialApp.router(
+          routerConfig: _router,
+          debugShowCheckedModeBanner: false,
+          theme: lightTheme,
+          darkTheme: darkTheme,
+          themeMode: ThemeMode.system, // Flutter сам выберет тему
+        );
+      },
+    );
+  }
 }

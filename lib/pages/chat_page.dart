@@ -1,7 +1,10 @@
-// lib/pages/chat_page.dart (fixed null bang by assigning _provider directly before addListener; added mounted check only for setState)
+// lib/pages/chat_page.dart
+
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_ai_toolkit/flutter_ai_toolkit.dart';
 
 import '../data/chat.dart';
@@ -27,6 +30,7 @@ class ChatView extends StatefulWidget {
 class _ChatViewState extends State<ChatView> {
   LlmProvider? _provider;
   late Chat _currentChat;
+  StreamSubscription<QuerySnapshot>? _historySubscription;
 
   @override
   void initState() {
@@ -35,19 +39,26 @@ class _ChatViewState extends State<ChatView> {
   }
 
   Future<void> _init() async {
-    // Use firstWhere with orElse to safely handle missing chat
     _currentChat = widget.repository.chats.firstWhere(
-      (chat) => chat.id == widget.chatId, 
-      orElse: () => throw StateError('Chat with ID ${widget.chatId} not found.')
+      (chat) => chat.id == widget.chatId,
+      orElse: () => throw StateError('Chat with ID ${widget.chatId} not found.'),
     );
     final history = await widget.repository.getHistory(_currentChat);
-    
-    // Load globals and chat-specific settings (static call)
+
     final globals = await ChatRepository.getGlobalSettings();
     final apiKey = globals['apiKey'] as String? ?? '';
     final baseUrl = globals['baseUrl'] as String? ?? 'https://api.openai.com/v1';
-    
+
     _setProvider(history, apiKey, baseUrl, _currentChat.model, _currentChat.temperature, _currentChat.topP, _currentChat.maxTokens);
+
+    // Start real-time listener for history changes
+    final historyCollection = FirebaseFirestore.instance
+        .collection('users')
+        .doc(ChatRepository.user!.uid)
+        .collection('chats')
+        .doc(widget.chatId)
+        .collection('history');
+    _historySubscription = historyCollection.snapshots().listen(_onHistorySnapshot);
   }
 
   void _setProvider(
@@ -60,7 +71,6 @@ class _ChatViewState extends State<ChatView> {
     double maxTokens,
   ) {
     _provider?.removeListener(_onHistoryChanged);
-    // Assign directly to ensure non-null before addListener
     _provider = OpenAIProvider(
       apiKey: apiKey,
       baseUrl: baseUrl,
@@ -70,17 +80,62 @@ class _ChatViewState extends State<ChatView> {
       maxTokens: maxTokens,
       initialHistory: history ?? [],
     );
-    // Only setState if mounted to trigger rebuild
     if (mounted) {
       setState(() {});
     }
-    // Now safe to add listener
     _provider!.addListener(_onHistoryChanged);
+  }
+
+  // Handle real-time snapshot updates
+  Future<void> _onHistorySnapshot(QuerySnapshot snapshot) async {
+    debugPrint('History snapshot received with ${snapshot.docs.length} docs');
+    final indexedMessages = <int, ChatMessage>{};
+    for (final doc in snapshot.docs) {
+      try {
+        final data = doc.data() as Map<String, dynamic>;
+        final index = int.tryParse(doc.id) ?? 0;
+        final message = ChatMessage.fromJson(data);
+        indexedMessages[index] = message;
+        debugPrint('Processed message at index $index: ${message.text?.substring(0, 50) ?? ''}...');
+      } catch (e) {
+        debugPrint('Skipping invalid message doc ${doc.id}: $e');
+      }
+    }
+
+    final newHistory = indexedMessages.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final sortedHistory = newHistory.map((e) => e.value).toList();
+
+    // Update provider only if history has changed
+    if (_provider != null && _isHistoryDifferent(sortedHistory, _provider!.history.toList())) {
+      debugPrint('History changed, updating provider');
+      final globals = await ChatRepository.getGlobalSettings();
+      final apiKey = globals['apiKey'] as String? ?? '';
+      final baseUrl = globals['baseUrl'] as String? ?? 'https://api.openai.com/v1';
+      _setProvider(sortedHistory, apiKey, baseUrl, _currentChat.model, _currentChat.temperature, _currentChat.topP, _currentChat.maxTokens);
+      widget.onTitleChanged?.call();
+    } else {
+      debugPrint('No history change detected');
+    }
+  }
+
+  // Compare histories to detect changes efficiently
+  bool _isHistoryDifferent(List<ChatMessage> newHistory, List<ChatMessage> oldHistory) {
+    if (newHistory.length != oldHistory.length) return true;
+    for (var i = 0; i < newHistory.length; i++) {
+      final newMsg = newHistory[i];
+      final oldMsg = oldHistory[i];
+      if (newMsg.text != oldMsg.text || newMsg.origin != oldMsg.origin) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @override
   void dispose() {
     _provider?.removeListener(_onHistoryChanged);
+    _historySubscription?.cancel();
     super.dispose();
   }
 
@@ -89,24 +144,65 @@ class _ChatViewState extends State<ChatView> {
     if (_provider == null) {
       return const Center(child: CircularProgressIndicator());
     }
+
+    final colorScheme = Theme.of(context).colorScheme;
+    final submitButtonStyle = ActionButtonStyle(
+      iconColor: colorScheme.onPrimary,
+    );
+
+    final attachFileButtonStyle = ActionButtonStyle(
+      iconColor: colorScheme.onPrimary,
+    );
+
+    final chatStyle = LlmChatViewStyle(
+      backgroundColor: colorScheme.surface,
+      userMessageStyle: UserMessageStyle(
+        decoration: BoxDecoration(
+          color: colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        textStyle: TextStyle(color: colorScheme.onPrimaryContainer),
+      ),
+      llmMessageStyle: LlmMessageStyle(
+        decoration: BoxDecoration(
+          color: colorScheme.secondaryContainer,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        markdownStyle: MarkdownStyleSheet(
+          p: TextStyle(color: colorScheme.onSecondaryContainer),
+        ),
+      ),
+      chatInputStyle: ChatInputStyle(
+        backgroundColor: colorScheme.surfaceContainer,
+        textStyle: TextStyle(color: colorScheme.onSurface),
+      ),
+      submitButtonStyle: submitButtonStyle,
+      attachFileButtonStyle: attachFileButtonStyle,
+    );
+
     return ListenableBuilder(
       listenable: _provider!,
-      builder: (context, child) => LlmChatView(provider: _provider!),
+      builder: (context, child) => LlmChatView(
+        provider: _provider!,
+        style: chatStyle,
+      ),
     );
   }
 
   Future<void> _onHistoryChanged() async {
     if (!mounted || _provider == null) return;
     final history = _provider!.history.toList();
+    debugPrint('History changed, length: ${history.length}, last message: ${history.last.text?.substring(0, 50) ?? ''}...');
 
     await widget.repository.updateHistory(_currentChat, history);
 
-    if (history.length != 2) return;
-    if (_currentChat.title != ChatRepository.newChatTitle) return;
+    if (history.length != 2 || _currentChat.title != ChatRepository.newChatTitle) {
+      return;
+    }
 
     assert(history[0].origin.isUser);
     assert(history[1].origin.isLlm);
-    // Use static calls for globals in tempProvider
+
     final globals = await ChatRepository.getGlobalSettings();
     final tempProvider = OpenAIProvider(
       apiKey: globals['apiKey'] as String? ?? '',
@@ -117,25 +213,59 @@ class _ChatViewState extends State<ChatView> {
       maxTokens: _currentChat.maxTokens,
       initialHistory: history,
     );
-    final stream = tempProvider.sendMessageStream(
-      'Please give me a short title for this chat. It should be a single, '
-      'short phrase with no markdown',
-    );
+    try {
+      final stream = tempProvider.sendMessageStream(
+        'Please give me a short title for this chat based on the user message: "${history[0].text}". It should be a single short phrase, max 50 characters, no markdown.',
+      );
 
-    final title = await stream.join();
-    if (title.trim().isEmpty) return;
-    final chatWithNewTitle = Chat(
-      id: _currentChat.id, 
-      title: title.trim(),
-      model: _currentChat.model,
-      temperature: _currentChat.temperature,
-      topP: _currentChat.topP,
-      maxTokens: _currentChat.maxTokens,
-    );
-    await widget.repository.updateChat(chatWithNewTitle);
-    if (mounted) {
-      setState(() => _currentChat = chatWithNewTitle);
-      widget.onTitleChanged?.call();
+      StringBuffer titleBuffer = StringBuffer();
+      await for (var chunk in stream) {
+        titleBuffer.write(chunk);
+        debugPrint('Title stream chunk: $chunk');
+      }
+      final title = titleBuffer.toString().trim();
+      debugPrint('Generated title: $title');
+
+      final newTitle = title.isNotEmpty ? title : 'New Chat ${DateTime.now().year}-${DateTime.now().month}-${DateTime.now().day}'; // Fallback with date
+      if (newTitle == _currentChat.title) return;
+
+      final chatWithNewTitle = _currentChat.copyWith(title: newTitle);
+      await widget.repository.updateChat(chatWithNewTitle);
+
+      if (mounted) {
+        setState(() => _currentChat = chatWithNewTitle);
+        widget.onTitleChanged?.call();
+      }
+    } catch (e) {
+      debugPrint('Error generating chat title: $e');
+      // Use fallback title
+      final newTitle = 'New Chat ${DateTime.now().year}-${DateTime.now().month}-${DateTime.now().day}';
+      final chatWithNewTitle = _currentChat.copyWith(title: newTitle);
+      await widget.repository.updateChat(chatWithNewTitle);
+      if (mounted) {
+        setState(() => _currentChat = chatWithNewTitle);
+        widget.onTitleChanged?.call();
+      }
     }
+  }
+}
+
+extension ChatCopyWith on Chat {
+  Chat copyWith({
+    String? id,
+    String? title,
+    String? model,
+    double? temperature,
+    double? topP,
+    double? maxTokens,
+  }) {
+    return Chat(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      model: model ?? this.model,
+      temperature: temperature ?? this.temperature,
+      topP: topP ?? this.topP,
+      maxTokens: maxTokens ?? this.maxTokens,
+    );
   }
 }
